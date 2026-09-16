@@ -1,0 +1,6 @@
+name: EndVoidRescue
+version: 1.0.0
+main: cn.endvoidrescue.EndVoidRescuePlugin
+api-version: '1.21'
+author: MOD
+description: Protects ordinary items from void deaths in The End.
