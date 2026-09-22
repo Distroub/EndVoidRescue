@@ -8,11 +8,7 @@ blacklist:
   - ENDER_PEARL
   - END_CRYSTAL
 remove-non-curse-enchant: true
-shulker:
-  max-depth: 5
 burst:
   radius: 2.0
   merge-similar: true
   pickup-delay-ticks: 10
-  particle: EXPLOSION
-  sound: ENTITY_GENERIC_EXPLODE

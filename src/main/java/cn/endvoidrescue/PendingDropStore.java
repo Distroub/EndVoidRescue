@@ -25,6 +25,10 @@ final class PendingDropStore {
         for (int index = 0; index < items.size(); index++) {
             data.set(path + "." + index, items.get(index));
         }
+        if (items.isEmpty()) {
+            // 空列表不留下空记录，否则会被序列化成 "players.<uuid>: {}"。
+            pruneEmptyPlayersSection();
+        }
         save();
     }
 
@@ -45,8 +49,22 @@ final class PendingDropStore {
     }
 
     synchronized void remove(UUID playerId) {
-        data.set("players." + playerId, null);
+        String path = "players." + playerId;
+        if (!data.contains(path)) {
+            // 没有记录可清理（例如死亡时背包为空），不重写文件：重生/登录事件很频繁。
+            return;
+        }
+        data.set(path, null);
+        pruneEmptyPlayersSection();
         save();
+    }
+
+    /** 所有玩家记录都清空后，把空的 players 段一并删除，避免文件里留下 "players: {}"。 */
+    private void pruneEmptyPlayersSection() {
+        ConfigurationSection players = data.getConfigurationSection("players");
+        if (players != null && players.getKeys(false).isEmpty()) {
+            data.set("players", null);
+        }
     }
 
     private void save() {

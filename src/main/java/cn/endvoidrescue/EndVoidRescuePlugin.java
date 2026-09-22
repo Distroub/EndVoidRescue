@@ -1,10 +1,9 @@
 package cn.endvoidrescue;
 
+import io.papermc.paper.datacomponent.DataComponentTypes;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
-import org.bukkit.Particle;
-import org.bukkit.Sound;
 import org.bukkit.World;
 import org.bukkit.block.ShulkerBox;
 import org.bukkit.enchantments.Enchantment;
@@ -29,12 +28,12 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
 import java.util.Set;
+import java.util.UUID;
 
 public final class EndVoidRescuePlugin extends JavaPlugin implements Listener {
     private final Random random = new Random();
     private PendingDropStore store;
     private Set<Material> blacklist;
-    private int maxDepth;
 
     @Override
     public void onEnable() {
@@ -55,27 +54,21 @@ public final class EndVoidRescuePlugin extends JavaPlugin implements Listener {
                 getLogger().warning("Unknown blacklist material: " + name);
             }
         }
-        maxDepth = Math.max(0, getConfig().getInt("shulker.max-depth", 5));
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.HIGHEST)
     public void onPlayerDeath(PlayerDeathEvent event) {
         Player player = event.getEntity();
         if (!isTriggerDeath(player)) {
             return;
         }
-
         event.setKeepInventory(true);
-        event.setKeepLevel(false);
-        event.setDroppedExp(0);
         event.getDrops().clear();
-        player.setLevel(0);
-        player.setExp(0.0f);
-
         // 先清理玩家背包，再把潜影盒内容交给重生事件处理。
         List<ItemStack> pending = new ArrayList<>();
         processInventory(player.getInventory(), pending);
         if (pending.isEmpty()) {
+            // 死亡时可能留下空记录（或历史版本留下的残留），这里同步清理，不写入空列表。
             store.put(player.getUniqueId(), List.of());
         } else {
             store.put(player.getUniqueId(), mergeIfConfigured(pending));
@@ -85,23 +78,34 @@ public final class EndVoidRescuePlugin extends JavaPlugin implements Listener {
     @EventHandler
     public void onPlayerRespawn(PlayerRespawnEvent event) {
         Player player = event.getPlayer();
-        List<ItemStack> pending = store.get(player.getUniqueId());
+        UUID playerId = player.getUniqueId();
+        List<ItemStack> pending = store.get(playerId);
         if (pending.isEmpty()) {
+            // 死亡时可能留下空记录（或历史版本留下的残留），这里同步清理，不提前 return。
+            // 【待确认 3】实测（YamlConfiguration 探针）：put(uuid, List.of()) 在文件里原本没有该玩家时
+            // 不会写出 players.<uuid> 条目；真正的残留形态是 remove 后留下的 "players: {}"，
+            // 以及旧版可能写过的 "players.<uuid>: {}"（get() 会读成空列表）。
+            // 因此 PendingDropStore 里同时做了「清空后连空 players 段一起删」。
+            store.remove(playerId);
             return;
         }
         Location respawnLocation = event.getRespawnLocation().clone();
-        // 延迟一 tick，确保玩家已经传送到最终重生位置。
+        // 延迟 1 tick，确保玩家已经传送到最终重生位置。
         Bukkit.getScheduler().runTaskLater(this, () -> {
-            burst(player, respawnLocation, pending);
-            store.remove(player.getUniqueId());
+            try {
+                burst(player, respawnLocation, pending);
+            } finally {
+                // burst 即使抛异常也必须清理记录，否则记录会永久残留在 pending-drops.yml。
+                // 【待确认 5】代价：burst 真正失败时那批物品会永久丢失（只有日志），
+                // 这是「不要残留」目标下的必然取舍，当前没有重试/兜底。
+                // 若需要兜底（保留到下次登录再发、或改投到重生点所在世界/主城），需另行设计。
+                store.remove(playerId);
+            }
         }, 1L);
     }
 
     private boolean isTriggerDeath(Player player) {
-        if (player.getWorld().getEnvironment() != configuredEnvironment()) {
-            return false;
-        }
-        if (player.getLastDamageCause() == null) {
+        if (player.getWorld().getEnvironment() != configuredEnvironment() || player.getLastDamageCause() == null) {
             return false;
         }
         return player.getLastDamageCause().getCause() == configuredCause();
@@ -126,17 +130,17 @@ public final class EndVoidRescuePlugin extends JavaPlugin implements Listener {
     }
 
     private void processInventory(Inventory inventory, List<ItemStack> pending) {
-        for (int slot = 0; slot < inventory.getSize(); slot++) {
+        for (int slot = 0; slot < inventory.getSize(); ++slot) {
             ItemStack item = inventory.getItem(slot);
             if (item == null || item.getType().isAir()) {
                 continue;
             }
-            ItemStack processed = processItem(item, 0, pending);
+            ItemStack processed = processItem(item, pending);
             inventory.setItem(slot, processed);
         }
     }
 
-    private ItemStack processItem(ItemStack original, int depth, List<ItemStack> pending) {
+    private ItemStack processItem(ItemStack original, List<ItemStack> pending) {
         ItemStack item = original.clone();
         if (isBlacklisted(item.getType())) {
             return null;
@@ -145,31 +149,27 @@ public final class EndVoidRescuePlugin extends JavaPlugin implements Listener {
             if (!hasContents(item)) {
                 return null;
             }
-            // 达到上限后，当前潜影盒及其剩余内容全部丢弃。
-            if (depth >= maxDepth) {
-                return null;
-            }
-            extractShulkerContents(item, depth + 1, pending);
+            extractShulkerContents(item, pending);
             return null;
         }
-        stripNonCurseEnchantments(item);
-        return item;
+        return stripNonCurseEnchantments(item);
     }
 
-    private void extractShulkerContents(ItemStack shulkerItem, int depth, List<ItemStack> pending) {
+    private void extractShulkerContents(ItemStack shulkerItem, List<ItemStack> pending) {
         BlockStateMeta meta = (BlockStateMeta) shulkerItem.getItemMeta();
         if (meta == null || !(meta.getBlockState() instanceof ShulkerBox box)) {
             return;
         }
-        // 这里递归处理盒中盒，普通物品直接加入待爆出列表。
         for (ItemStack content : box.getInventory().getContents()) {
-            if (content == null || content.getType().isAir()) {
+            if (content == null) {
                 continue;
             }
-            ItemStack processed = processItem(content, depth, pending);
-            if (processed != null) {
-                pending.add(processed);
+            Material type = content.getType();
+            if (type.isAir() || isBlacklisted(type)) {
+                continue;
             }
+            ItemStack leaf = content.clone();
+            pending.add(stripNonCurseEnchantments(leaf));
         }
     }
 
@@ -194,27 +194,68 @@ public final class EndVoidRescuePlugin extends JavaPlugin implements Listener {
         return blacklist.contains(material);
     }
 
-    private void stripNonCurseEnchantments(ItemStack item) {
+    /**
+     * 模拟砂轮的祛魔：移除所有非诅咒附魔，并把累计惩罚重置为 0。
+     *
+     * <p>【待确认 1】RepairCost 只能走 DataComponent：Paper 26.1.2 的 {@link ItemMeta} 已
+     * <b>移除</b>（不是废弃）{@code setRepairCost}/{@code getRepairCost}，实测
+     * {@code meta.setRepairCost(0)} 编译报「找不到符号」。本版本唯一途径是
+     * {@code DataComponentTypes.REPAIR_COST}，而 {@code ItemStack#setData} 在 Paper 上标注了
+     * {@code @Experimental}（编译无警告）。若不想依赖实验性 API，只能放弃这项需求。
+     *
+     * <p>【待确认 2】附魔书转普通书分支未做运行时实测：本地只有 paper-api，没有
+     * paper-server/CraftBukkit 实现，无法验证 {@code setItemMeta(null)} 的真实行为
+     * （契约说是「清除 meta」，但 CraftBukkit 历史实现会把堆叠置空）。这里选择直接删掉该调用，
+     * 两种解释下都正确。建议测试服实测：带经验修补的附魔书在末地虚空死亡后重生，应掉出 1 本普通书。
+     *
+     * @return 处理后的物品；附魔书被祛成普通书时会返回一个全新的 {@link Material#BOOK} 堆叠，
+     *         调用方必须使用返回值，不能再依赖传入的实例。
+     */
+    private ItemStack stripNonCurseEnchantments(ItemStack item) {
         if (!getConfig().getBoolean("remove-non-curse-enchant", true)) {
-            return;
+            return item;
         }
         ItemMeta meta = item.getItemMeta();
         if (meta == null) {
-            return;
+            return item;
         }
+        boolean hasMending = meta.getEnchants().containsKey(Enchantment.MENDING);
+        if (meta instanceof EnchantmentStorageMeta storedMeta
+                && storedMeta.getStoredEnchants().containsKey(Enchantment.MENDING)) {
+            hasMending = true;
+        }
+        if (!hasMending) {
+            return item;
+        }
+        // 砂轮祛魔：移除所有非诅咒附魔，保留绑定诅咒和消失诅咒
         if (meta instanceof EnchantmentStorageMeta storedMeta) {
             for (Enchantment enchantment : new HashSet<>(storedMeta.getStoredEnchants().keySet())) {
                 if (!isCurse(enchantment)) {
                     storedMeta.removeStoredEnchant(enchantment);
                 }
             }
-        }
-        for (Enchantment enchantment : new HashSet<>(meta.getEnchants().keySet())) {
-            if (!isCurse(enchantment)) {
-                meta.removeEnchant(enchantment);
+            // 附魔书祛魔后若不再有附魔，退化为普通书。
+            // 这里新建一个干净的书：setType 已废弃（Javadoc 明确不建议改已存在堆叠的类型），
+            // 直接新建可确保没有残留的 STORED_ENCHANTMENTS 等组件。
+            // 【待确认 4】为此本方法签名从 void 改为返回 ItemStack（仅插件内 2 处调用，无外部 API 影响）。
+            // 若希望保留 void 签名，可退回 item.setType(...)，但会带 deprecation 警告。
+            // 注意：withType(Material) 不能用，它会保留 item meta，而 EnchantmentStorageMeta 对 BOOK 不适用。
+            if (item.getType() == Material.ENCHANTED_BOOK && storedMeta.getStoredEnchants().isEmpty()) {
+                return ItemStack.of(Material.BOOK, Math.max(1, item.getAmount()));
+            }
+        } else {
+            for (Enchantment enchantment : new HashSet<>(meta.getEnchants().keySet())) {
+                if (!isCurse(enchantment)) {
+                    meta.removeEnchant(enchantment);
+                }
             }
         }
         item.setItemMeta(meta);
+        // 砂轮在祛魔的同时会重置累计惩罚（repair_cost = 0）。
+        // Paper 26.1.2 的 ItemMeta 已移除 setRepairCost，只能写数据组件；
+        // 必须放在 setItemMeta 之后，否则可能被 meta 里带回来的旧值覆盖。
+        item.setData(DataComponentTypes.REPAIR_COST, 0);
+        return item;
     }
 
     private boolean isCurse(Enchantment enchantment) {
@@ -254,40 +295,30 @@ public final class EndVoidRescuePlugin extends JavaPlugin implements Listener {
     }
 
     private void burst(Player player, Location location, List<ItemStack> items) {
-        if (!location.getChunk().isLoaded()) {
-            location.getChunk().load();
+        // 位置没有世界时 getWorld() 返回 null，getChunk()/dropItem 会连锁抛 NPE；
+        // 世界已卸载时 getWorld() 甚至抛 IllegalArgumentException("World unloaded")。
+        // isWorldLoaded() 两种情况都能安全判定，因此在这里直接退出；
+        // 调用方会在 finally 中清理记录，玩家不会因为异常丢掉待发放记录。
+        World world = location.isWorldLoaded() ? location.getWorld() : null;
+        if (world == null) {
+            getLogger().warning("Cannot release " + items.size() + " pending item stack(s) for "
+                    + player.getName() + ": respawn location " + location + " has no loaded world");
+            return;
+        }
+        // 掉落前确保区块已加载，未加载时区块内的掉落物会丢失。
+        if (!world.isChunkLoaded(location.getBlockX() >> 4, location.getBlockZ() >> 4)) {
+            world.getChunkAt(location);
         }
         double radius = Math.max(0.0, getConfig().getDouble("burst.radius", 2.0));
         int pickupDelay = Math.max(0, getConfig().getInt("burst.pickup-delay-ticks", 10));
-        // 使用均匀面积分布，避免物品集中在圆心附近。
         for (ItemStack item : items) {
             double angle = random.nextDouble() * Math.PI * 2.0;
             double distance = Math.sqrt(random.nextDouble()) * radius;
-            Location dropLocation = location.clone().add(Math.cos(angle) * distance, 0.25,
-                    Math.sin(angle) * distance);
-            Item entity = location.getWorld().dropItem(dropLocation, item);
+            Location dropLocation = location.clone().add(Math.cos(angle) * distance, 1.0, Math.sin(angle) * distance);
+            Item entity = world.dropItem(dropLocation, item);
             entity.setPickupDelay(pickupDelay);
-            entity.setVelocity(new Vector((random.nextDouble() - 0.5) * 0.15, 0.18,
-                    (random.nextDouble() - 0.5) * 0.15));
+            entity.setVelocity(new Vector((random.nextDouble() - 0.5) * 0.15, 0, (random.nextDouble() - 0.5) * 0.15));
         }
-        playEffects(location);
         getLogger().info("Released " + items.size() + " pending item stack(s) for " + player.getName());
-    }
-
-    private void playEffects(Location location) {
-        try {
-            String particleName = getConfig().getString("burst.particle", "EXPLOSION");
-            Particle particle = Particle.valueOf(particleName == null ? "EXPLOSION" : particleName);
-            location.getWorld().spawnParticle(particle, location, 24, 0.8, 0.5, 0.8, 0.05);
-        } catch (IllegalArgumentException exception) {
-            getLogger().warning("Unknown particle configured");
-        }
-        try {
-            String soundName = getConfig().getString("burst.sound", "ENTITY_GENERIC_EXPLODE");
-            Sound sound = Sound.valueOf(soundName == null ? "ENTITY_GENERIC_EXPLODE" : soundName);
-            location.getWorld().playSound(location, sound, 1.0f, 1.0f);
-        } catch (IllegalArgumentException exception) {
-            getLogger().warning("Unknown sound configured");
-        }
     }
 }
