@@ -20,7 +20,7 @@
 - 仅对带有经验修补（`MENDING`）的物品执行砂轮式祛魔：移除所有非诅咒附魔，保留绑定诅咒和消失诅咒，并将 `repair_cost` 重置为 `0`。
 - 带有经验修补的附魔书在祛魔后不再包含任何附魔时，会退化为普通书。
 - 按配置合并相同的可堆叠物品。
-- 玩家重生 1 tick 后，在重生点附近随机散落物品，并设置拾取延迟。
+- 玩家重生 1 tick 后，在重生点所在方块内随机散落物品，并设置拾取延迟。
 - 待返还物品保存在 `pending-drops.yml`，玩家重连后仍可继续领取。
 
 ## 构建
@@ -29,12 +29,6 @@
 
 ```bash
 mvn clean package
-```
-
-输出：
-
-```text
-target/EndVoidRescue-0.2.0-beta.jar
 ```
 
 ## 安装
@@ -65,7 +59,7 @@ blacklist:
   - END_CRYSTAL
 remove-non-curse-enchant: true
 burst:
-  radius: 2.0
+  radius: 0.5
   merge-similar: true
   pickup-delay-ticks: 10
 ```
@@ -76,7 +70,7 @@ burst:
 - `trigger-cause`：触发救援的死亡原因，使用 Bukkit 的 `DamageCause` 名称。
 - `blacklist`：死亡时直接丢弃的材料名称列表。
 - `remove-non-curse-enchant`：是否启用经验修补触发的砂轮式祛魔规则。
-- `burst.radius`：物品散落的圆形区域半径。
+- `burst.radius`：重生点所在格内的水平散落程度（格）。有效上限 `0.5`，更大的值会被截断，避免物品落到邻格卡墙。
 - `burst.merge-similar`：是否在发放前合并相同的可堆叠物品。
 - `burst.pickup-delay-ticks`：生成物品实体后的拾取延迟，单位为 tick。
 

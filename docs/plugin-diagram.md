@@ -71,14 +71,18 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A["burst() 开始<br/>读取 radius / pickup-delay"] --> B["确保区块已加载<br/>world.getChunkAt(location)"]
+    A["burst() 开始<br/>读取 radius / pickup-delay"] --> A2["水平原点对齐到方块中心<br/>blockX+0.5 / blockZ+0.5"]
+    A2 --> A3{"radius > 0.5?"}
+    A3 -- 是 --> A4["截断为 0.5<br/>首次截断打 warning"]
+    A3 -- 否 --> B
+    A4 --> B["确保区块已加载<br/>world.getChunkAt(location)"]
     B --> C["遍历每个待爆出 ItemStack"]
     C --> D["生成随机角度<br/>θ ~ U(0, 2π)"]
     D --> E["均匀面积分布半径<br/>r = sqrt(u) * radius, u ~ U(0,1)"]
-    E --> F["计算掉落坐标<br/>x = x0 + cos(θ)·r<br/>y = y0 + 1<br/>z = z0 + sin(θ)·r"]
+    E --> F["计算掉落坐标<br/>x = blockX+0.5 + cos(θ)·r<br/>y = y0 + 1<br/>z = blockZ+0.5 + sin(θ)·r"]
     F --> G["dropItem 生成 Item 实体"]
     G --> H["setPickupDelay<br/>防止立刻被拾取"]
-    H --> I["setVelocity<br/>vx = (u1-0.5)·0.15<br/>vy = 0<br/>vz = (u2-0.5)·0.15"]
+    H --> I["setVelocity<br/>vx = (u1-0.5)·0.08<br/>vy = 0<br/>vz = (u2-0.5)·0.08"]
     I --> J["受重力与阻力影响<br/>自然下落"]
     J --> K{"还有物品?"}
     K -- 是 --> C
@@ -93,8 +97,8 @@ flowchart TD
 | $\theta$ | 随机角度 | $\theta \sim U(0, 2\pi)$，决定物品散落的水平方向 |
 | $u, u_1, u_2$ | 均匀随机数 | $\sim U(0, 1)$，由 `random.nextDouble()` 生成 |
 | $r$ | 散落半径 | $r = \sqrt{u} \cdot R$，使用平方根实现**均匀面积分布**，避免物品集中在圆心 |
-| $R$ | 配置半径 | 来自 `burst.radius`，默认 `2.0` |
-| $x_0, y_0, z_0$ | 重生点坐标 | 玩家最终重生位置 |
-| $x, y, z$ | 物品生成坐标 | $x = x_0 + \cos(\theta) \cdot r$<br>$y = y_0 + 1$<br>$z = z_0 + \sin(\theta) \cdot r$ |
-| $v_x, v_y, v_z$ | 初速度分量 | $v_x = (u_1 - 0.5) \cdot 0.15$<br>$v_y = 0$<br>$v_z = (u_2 - 0.5) \cdot 0.15$ |
+| $R$ | 格内散落程度 | 来自 `burst.radius`，有效上限 $0.5$（更大值截断） |
+| $x_0, y_0, z_0$ | 重生点坐标 | 水平对齐到所在方块中心；Y 为脚底 |
+| $x, y, z$ | 物品生成坐标 | $x = \mathrm{blockX}+0.5 + \cos(\theta) \cdot r$<br>$y = y_0 + 1$<br>$z = \mathrm{blockZ}+0.5 + \sin(\theta) \cdot r$ |
+| $v_x, v_y, v_z$ | 初速度分量 | $v_x = (u_1 - 0.5) \cdot 0.08$<br>$v_y = 0$<br>$v_z = (u_2 - 0.5) \cdot 0.08$ |
 | $N$ | 物品堆叠数 | 本次爆出的 `ItemStack` 数量 |

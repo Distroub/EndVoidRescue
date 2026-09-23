@@ -34,6 +34,7 @@ public final class EndVoidRescuePlugin extends JavaPlugin implements Listener {
     private final Random random = new Random();
     private PendingDropStore store;
     private Set<Material> blacklist;
+    private boolean loggedBurstRadiusClamp;
 
     @Override
     public void onEnable() {
@@ -54,9 +55,11 @@ public final class EndVoidRescuePlugin extends JavaPlugin implements Listener {
                 getLogger().warning("Unknown blacklist material: " + name);
             }
         }
+        // 配置可能从合法值改成超限值，允许下次 burst 再警告一次。
+        loggedBurstRadiusClamp = false;
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST)
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onPlayerDeath(PlayerDeathEvent event) {
         Player player = event.getEntity();
         if (!isTriggerDeath(player)) {
@@ -68,8 +71,8 @@ public final class EndVoidRescuePlugin extends JavaPlugin implements Listener {
         List<ItemStack> pending = new ArrayList<>();
         processInventory(player.getInventory(), pending);
         if (pending.isEmpty()) {
-            // 死亡时可能留下空记录（或历史版本留下的残留），这里同步清理，不写入空列表。
-            store.put(player.getUniqueId(), List.of());
+            // 死亡时背包为空（或全为黑名单/空潜影盒），清理可能残留的记录。
+            store.remove(player.getUniqueId());
         } else {
             store.put(player.getUniqueId(), mergeIfConfigured(pending));
         }
@@ -195,14 +198,7 @@ public final class EndVoidRescuePlugin extends JavaPlugin implements Listener {
     }
 
     /**
-     * 模拟砂轮的祛魔：移除所有非诅咒附魔，并把累计惩罚重置为 0。
-     *
-     * <p>【待确认 1】RepairCost 只能走 DataComponent：Paper 26.1.2 的 {@link ItemMeta} 已
-     * <b>移除</b>（不是废弃）{@code setRepairCost}/{@code getRepairCost}，实测
-     * {@code meta.setRepairCost(0)} 编译报「找不到符号」。本版本唯一途径是
-     * {@code DataComponentTypes.REPAIR_COST}，而 {@code ItemStack#setData} 在 Paper 上标注了
-     * {@code @Experimental}（编译无警告）。若不想依赖实验性 API，只能放弃这项需求。
-     *
+     * 对带经验修补的物品做砂轮式祛魔：移除非诅咒附魔，必要时把空附魔书退化成普通书。
      * <p>【待确认 2】附魔书转普通书分支未做运行时实测：本地只有 paper-api，没有
      * paper-server/CraftBukkit 实现，无法验证 {@code setItemMeta(null)} 的真实行为
      * （契约说是「清除 meta」，但 CraftBukkit 历史实现会把堆叠置空）。这里选择直接删掉该调用，
@@ -309,15 +305,38 @@ public final class EndVoidRescuePlugin extends JavaPlugin implements Listener {
         if (!world.isChunkLoaded(location.getBlockX() >> 4, location.getBlockZ() >> 4)) {
             world.getChunkAt(location);
         }
-        double radius = Math.max(0.0, getConfig().getDouble("burst.radius", 2.0));
+        // burst.radius 解释为「重生点所在格内的水平散落程度」，不是跨格半径。
+        // 硬封顶 0.5：物品中心必须落在该方块开区间内，避免贴边后被挤进邻格卡墙。
+        // 配置 > 0.5 时截断而不是改语义；缺省与 config.yml 一致，用 0.5。
+        double configuredRadius = Math.max(0.0, getConfig().getDouble("burst.radius", 0.5));
+        double radius = Math.min(configuredRadius, 0.5);
+        if (configuredRadius > 0.5 && !loggedBurstRadiusClamp) {
+            loggedBurstRadiusClamp = true;
+            getLogger().warning("burst.radius=" + configuredRadius
+                    + " exceeds the in-block limit 0.5 and was clamped to 0.5 "
+                    + "so items stay inside the respawn block and do not clip into adjacent walls");
+        }
         int pickupDelay = Math.max(0, getConfig().getInt("burst.pickup-delay-ticks", 10));
+        // 以重生点所在方块的水平中心为原点。getRespawnLocation() 通常已是脚底中心
+        // (blockX+0.5, feetY, blockZ+0.5)，但插件/床/世界出生点也可能给整数角点，
+        // 必须先对齐中心，否则 +/-0.5 会立刻跨出该格。
+        double centerX = location.getBlockX() + 0.5;
+        double centerZ = location.getBlockZ() + 0.5;
+        // y 用重生点脚底 +1：玩家站立格通常可通行，物品生成在胸口高度再下落。
+        // 不探测上方空气：getBlock() 在未加载/边界处可能引入额外失败路径；
+        // 重生点本身已被服务端校验为可站立，+1 是当前最稳的启发式。
+        double dropY = location.getY() + 1.0;
         for (ItemStack item : items) {
             double angle = random.nextDouble() * Math.PI * 2.0;
             double distance = Math.sqrt(random.nextDouble()) * radius;
-            Location dropLocation = location.clone().add(Math.cos(angle) * distance, 1.0, Math.sin(angle) * distance);
+            double offsetX = Math.cos(angle) * distance;
+            double offsetZ = Math.sin(angle) * distance;
+            Location dropLocation = new Location(world, centerX + offsetX, dropY, centerZ + offsetZ);
             Item entity = world.dropItem(dropLocation, item);
             entity.setPickupDelay(pickupDelay);
-            entity.setVelocity(new Vector((random.nextDouble() - 0.5) * 0.15, 0, (random.nextDouble() - 0.5) * 0.15));
+            // 水平初速必须很小：物品碰撞箱约 0.25，正负 0.04 在一格内足够散开，
+            // 又不会在落地前冲出方块边界。vy=0，靠重力下落。
+            entity.setVelocity(new Vector((random.nextDouble() - 0.5) * 0.08, 0, (random.nextDouble() - 0.5) * 0.08));
         }
         getLogger().info("Released " + items.size() + " pending item stack(s) for " + player.getName());
     }
