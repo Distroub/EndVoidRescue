@@ -6,13 +6,12 @@
 
     <groupId>cn.endvoidrescue</groupId>
     <artifactId>EndVoidRescue</artifactId>
-    <version>1.0.0</version>
-    <packaging>jar</packaging>
+    <version>0.2.0-beta.2</version>
 
     <properties>
-        <java.version>21</java.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <paper.version>1.21.4-R0.1-SNAPSHOT</paper.version>
+        <maven.compiler.release>25</maven.compiler.release>
+        <apiVersion>26.1.2</apiVersion>
     </properties>
 
     <repositories>
@@ -26,21 +25,17 @@
         <dependency>
             <groupId>io.papermc.paper</groupId>
             <artifactId>paper-api</artifactId>
-            <version>${paper.version}</version>
+            <version>26.1.2.build.74-stable</version>
             <scope>provided</scope>
         </dependency>
     </dependencies>
 
     <build>
-        <plugins>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.13.0</version>
-                <configuration>
-                    <release>${java.version}</release>
-                </configuration>
-            </plugin>
-        </plugins>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+            </resource>
+        </resources>
     </build>
 </project>

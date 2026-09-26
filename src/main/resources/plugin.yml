@@ -1,6 +1,6 @@
 name: EndVoidRescue
-version: 1.0.0
+version: ${project.version}
 main: cn.endvoidrescue.EndVoidRescuePlugin
-api-version: '1.21'
-author: MOD
+api-version: '${apiVersion}'
+author: dayDReam
 description: Protects ordinary items from void deaths in The End.
