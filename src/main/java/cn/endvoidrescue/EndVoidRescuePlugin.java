@@ -17,6 +17,7 @@ import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.BlockStateMeta;
+import org.bukkit.inventory.meta.BundleMeta;
 import org.bukkit.inventory.meta.EnchantmentStorageMeta;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -31,6 +32,7 @@ import java.util.Set;
 import java.util.UUID;
 
 public final class EndVoidRescuePlugin extends JavaPlugin implements Listener {
+    private static final int MAX_BUNDLE_DEPTH = 15;
     private final Random random = new Random();
     private PendingDropStore store;
     private Set<Material> blacklist;
@@ -155,7 +157,33 @@ public final class EndVoidRescuePlugin extends JavaPlugin implements Listener {
             extractShulkerContents(item, pending);
             return null;
         }
+        if (item.getItemMeta() instanceof BundleMeta) {
+            return processBundle(item, 0);
+        }
         return stripNonCurseEnchantments(item);
+    }
+
+    private ItemStack processBundle(ItemStack bundle, int depth) {
+        ItemMeta itemMeta = bundle.getItemMeta();
+        if (!(itemMeta instanceof BundleMeta meta) || depth >= MAX_BUNDLE_DEPTH) {
+            return bundle;
+        }
+        List<ItemStack> processedItems = new ArrayList<>();
+        for (ItemStack content : meta.getItems()) {
+            if (content == null || content.getType().isAir() || isBlacklisted(content.getType())) {
+                continue;
+            }
+            ItemStack processed = content.clone();
+            if (processed.getItemMeta() instanceof BundleMeta) {
+                processed = processBundle(processed, depth + 1);
+            } else {
+                processed = stripNonCurseEnchantments(processed);
+            }
+            processedItems.add(processed);
+        }
+        meta.setItems(processedItems);
+        bundle.setItemMeta(meta);
+        return bundle;
     }
 
     private void extractShulkerContents(ItemStack shulkerItem, List<ItemStack> pending) {
@@ -172,7 +200,12 @@ public final class EndVoidRescuePlugin extends JavaPlugin implements Listener {
                 continue;
             }
             ItemStack leaf = content.clone();
-            pending.add(stripNonCurseEnchantments(leaf));
+            if (leaf.getItemMeta() instanceof BundleMeta) {
+                leaf = processBundle(leaf, 0);
+            } else {
+                leaf = stripNonCurseEnchantments(leaf);
+            }
+            pending.add(leaf);
         }
     }
 
