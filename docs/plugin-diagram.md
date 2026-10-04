@@ -29,10 +29,11 @@ flowchart TD
         L --> L2{"pending 是否为空?"}
         L2 -- 是 --> Q["store.remove 清理空记录"]
         L2 -- 否 --> M["store.get 读取待爆出物品"]
-        M --> N["延迟 1 tick 确保传送完成"]
-        N --> O["burst 在重生点散落物品"]
+        M --> O["同步 burst 在重生点散落物品"]
         O --> P["拾取延迟 + 随机散落"]
-        O --> Q["try/finally: store.remove 清理记录<br/>burst 异常也不残留"]
+        O --> R{"burst 是否抛异常?"}
+        R -- 否 --> S["store.remove 清理记录"]
+        R -- 是 --> T["记 severe 后 return<br/>保留记录，下次死亡合并重试"]
     end
 ```
 
