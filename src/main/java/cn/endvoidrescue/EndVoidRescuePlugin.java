@@ -45,6 +45,11 @@ public final class EndVoidRescuePlugin extends JavaPlugin implements Listener {
         getLogger().info("EndVoidRescue enabled");
     }
 
+    @Override
+    public void onDisable() {
+        store.save();
+    }
+
     private void reloadSettings() {
         blacklist = EnumSet.noneOf(Material.class);
         for (String name : getConfig().getStringList("blacklist")) {

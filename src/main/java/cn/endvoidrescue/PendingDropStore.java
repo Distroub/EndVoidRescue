@@ -33,7 +33,6 @@ final class PendingDropStore {
             // 空列表不留下空记录，否则会被序列化成 "players.<uuid>: {}"。
             pruneEmptyPlayersSection();
         }
-        save();
     }
 
     synchronized List<ItemStack> get(UUID playerId) {
@@ -56,16 +55,12 @@ final class PendingDropStore {
     synchronized void remove(UUID playerId) {
         String path = "players." + playerId;
         if (!data.contains(path)) {
-            // 没有记录可清理（例如死亡时背包为空），不重写文件：重生/登录事件很频繁。
-            // 仅当残留 "players: {}" 空壳时才清理一次并写盘。
-            if (pruneEmptyPlayersSection()) {
-                save();
-            }
+            // 没有记录可清理（例如死亡时背包为空），只更新内存中的空壳。
+            pruneEmptyPlayersSection();
             return;
         }
         data.set(path, null);
         pruneEmptyPlayersSection();
-        save();
     }
 
     /** 所有玩家记录都清空后，把空的 players 段一并删除，避免文件里留下 "players: {}"。返回是否发生了清理。 */
@@ -78,7 +73,7 @@ final class PendingDropStore {
         return false;
     }
 
-    private void save() {
+    synchronized void save() {
         try {
             data.save(file);
         } catch (IOException exception) {
