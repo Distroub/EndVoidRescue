@@ -3,6 +3,7 @@ package cn.endvoidrescue;
 import io.papermc.paper.datacomponent.DataComponentTypes;
 import org.bukkit.Location;
 import org.bukkit.Material;
+import org.bukkit.Tag;
 import org.bukkit.World;
 import org.bukkit.block.ShulkerBox;
 import org.bukkit.enchantments.Enchantment;
@@ -138,18 +139,16 @@ public class EndVoidRescuePlugin extends JavaPlugin implements Listener {
     }
 
     private ItemStack processItem(ItemStack item, List<ItemStack> pending) {
-        if (isBlacklisted(item.getType())) {
+        Material type = item.getType();
+        if (isBlacklisted(type)) {
             return null;
         }
-        if (isShulker(item)) {
-            if (!hasContents(item)) {
-                return null;
-            }
-            extractShulkerContents(item, pending);
+        if (Tag.SHULKER_BOXES.isTagged(type)) {
+            processShulkerContents((ShulkerBox) ((BlockStateMeta) item.getItemMeta()).getBlockState(), pending);
             return null;
         }
-        if (item.getItemMeta() instanceof BundleMeta meta) {
-            return processBundle(item, meta, 0);
+        if (Tag.ITEMS_BUNDLES.isTagged(type)) {
+            return processBundle(item, (BundleMeta) item.getItemMeta(), 0);
         }
         return stripNonCurseEnchantments(item);
     }
@@ -175,11 +174,7 @@ public class EndVoidRescuePlugin extends JavaPlugin implements Listener {
         return bundle;
     }
 
-    private void extractShulkerContents(ItemStack shulkerItem, List<ItemStack> pending) {
-        BlockStateMeta meta = (BlockStateMeta) shulkerItem.getItemMeta();
-        if (meta == null || !(meta.getBlockState() instanceof ShulkerBox box)) {
-            return;
-        }
+    private void processShulkerContents(ShulkerBox box, List<ItemStack> pending) {
         for (ItemStack content : box.getInventory().getContents()) {
             if (content == null) {
                 continue;
@@ -196,23 +191,6 @@ public class EndVoidRescuePlugin extends JavaPlugin implements Listener {
             }
             pending.add(leaf);
         }
-    }
-
-    private boolean hasContents(ItemStack item) {
-        ItemMeta itemMeta = item.getItemMeta();
-        if (!(itemMeta instanceof BlockStateMeta meta) || !(meta.getBlockState() instanceof ShulkerBox box)) {
-            return false;
-        }
-        for (ItemStack content : box.getInventory().getContents()) {
-            if (content != null && !content.getType().isAir()) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private boolean isShulker(ItemStack item) {
-        return item.getType().name().endsWith("SHULKER_BOX");
     }
 
     private boolean isBlacklisted(Material material) {
