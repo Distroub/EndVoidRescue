@@ -204,8 +204,8 @@ public final class EndVoidRescuePlugin extends JavaPlugin implements Listener {
      * （契约说是「清除 meta」，但 CraftBukkit 历史实现会把堆叠置空）。这里选择直接删掉该调用，
      * 两种解释下都正确。建议测试服实测：带经验修补的附魔书在末地虚空死亡后重生，应掉出 1 本普通书。
      *
-     * @return 处理后的物品；附魔书被祛成普通书时会返回一个全新的 {@link Material#BOOK} 堆叠，
-     *         调用方必须使用返回值，不能再依赖传入的实例。
+     * @return 处理后的物品；附魔书被祛成普通书时会返回一个保留原有元数据的
+     *         {@link Material#BOOK} 堆叠，调用方必须使用返回值，不能再依赖传入的实例。
      */
     private ItemStack stripNonCurseEnchantments(ItemStack item) {
         if (!getConfig().getBoolean("remove-non-curse-enchant", true)) {
@@ -231,13 +231,12 @@ public final class EndVoidRescuePlugin extends JavaPlugin implements Listener {
                 }
             }
             // 附魔书祛魔后若不再有附魔，退化为普通书。
-            // 这里新建一个干净的书：setType 已废弃（Javadoc 明确不建议改已存在堆叠的类型），
-            // 直接新建可确保没有残留的 STORED_ENCHANTMENTS 等组件。
-            // 【待确认 4】为此本方法签名从 void 改为返回 ItemStack（仅插件内 2 处调用，无外部 API 影响）。
-            // 若希望保留 void 签名，可退回 item.setType(...)，但会带 deprecation 警告。
-            // 注意：withType(Material) 不能用，它会保留 item meta，而 EnchantmentStorageMeta 对 BOOK 不适用。
             if (item.getType() == Material.ENCHANTED_BOOK && storedMeta.getStoredEnchants().isEmpty()) {
-                return ItemStack.of(Material.BOOK, Math.max(1, item.getAmount()));
+                ItemStack book = ItemStack.of(Material.BOOK, item.getAmount());
+                book.copyDataFrom(item, type -> type != DataComponentTypes.STORED_ENCHANTMENTS
+                        && type != DataComponentTypes.REPAIR_COST);
+                book.setData(DataComponentTypes.REPAIR_COST, 0);
+                return book;
             }
         } else {
             for (Enchantment enchantment : new HashSet<>(meta.getEnchants().keySet())) {
